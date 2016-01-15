@@ -26,7 +26,8 @@ func main() {
 			return "action 1"
 		},
 	}
-	for _, message := range executeConcurrent(actions) {
+	messages := executeConcurrent(actions)
+	for _, message := range messages {
 		fmt.Printf("%s\n", message)
 	}
 	fmt.Println("done")
