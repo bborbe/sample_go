@@ -7,8 +7,8 @@ import (
 )
 
 func main() {
-	fmt.Println("print starts immediately")
 	maxConcurrentGoRoutines := 4
+	fmt.Printf("run %d go routines concurrent\n", maxConcurrentGoRoutines)
 	throttle := make(chan bool, maxConcurrentGoRoutines)
 	var wg sync.WaitGroup
 	for i := 0; i < 40; i++ {
