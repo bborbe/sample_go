@@ -2,10 +2,6 @@
 
 Samples in Go
 
-## Documentation
-
-http://godoc.org/github.com/bborbe/sample_go
-
 ## Copyright and license
 
     Copyright (c) 2016, Benjamin Borbe <bborbe@rocketnews.de>
