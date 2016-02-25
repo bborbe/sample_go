@@ -14,7 +14,7 @@ func main() {
 	fmt.Println("finished")
 }
 
-func action(done chan <- bool) {
+func action(done chan<- bool) {
 	time.Sleep(5 * time.Second)
 	fmt.Println("done")
 	done <- true
