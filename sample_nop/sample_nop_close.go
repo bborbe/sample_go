@@ -1,4 +1,4 @@
-package sample_nop_close
+package main
 
 import (
 	"bytes"
