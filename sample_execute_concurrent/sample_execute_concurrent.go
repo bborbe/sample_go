@@ -2,27 +2,20 @@ package main
 
 import (
 	"fmt"
-	"sync"
 	"time"
 )
 
 func main() {
-	fmt.Println("print starts immediately")
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go action("action 2", 2, &wg)
-	wg.Add(1)
-	go action("action 4", 4, &wg)
-	wg.Add(1)
-	go action("action 3", 3, &wg)
-	wg.Add(1)
-	go action("action 1", 1, &wg)
-	wg.Wait()
-	fmt.Println("done")
+	done := make(chan bool, 1)
+	fmt.Println("start action")
+	go action(done)
+	fmt.Println("wait on action done")
+	<-done
+	fmt.Println("finished")
 }
 
-func action(message string, timeToSleep time.Duration, wg *sync.WaitGroup) {
-	time.Sleep(timeToSleep * time.Second)
-	fmt.Println(message)
-	wg.Done()
+func action(done chan <- bool) {
+	time.Sleep(5 * time.Second)
+	fmt.Println("done")
+	done <- true
 }
