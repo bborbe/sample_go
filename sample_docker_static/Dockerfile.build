@@ -1,0 +1,6 @@
+FROM golang
+ADD Makefile /
+WORKDIR /
+RUN make setup
+RUN make buildgo
+CMD ["/bin/bash"]
