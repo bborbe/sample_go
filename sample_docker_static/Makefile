@@ -9,7 +9,7 @@ buildgo:
 builddocker:
 	docker build -t bborbe/static-go-webserver-build -f ./Dockerfile.build .
 	docker run -t bborbe/static-go-webserver-build /bin/true
-	docker cp `docker ps -q -n=1`:/main .
+	docker cp `docker ps -q -n=1 -f ancestor=bborbe/static-go-webserver-build`:/main .
 	docker build --rm=true --tag=bborbe/static-go-webserver -f Dockerfile.static .
 	rm main
 
