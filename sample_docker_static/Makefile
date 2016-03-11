@@ -11,6 +11,7 @@ builddocker:
 	docker run -t bborbe/static-go-webserver-build /bin/true
 	docker cp `docker ps -q -n=1`:/main .
 	docker build --rm=true --tag=bborbe/static-go-webserver -f Dockerfile.static .
+	rm main
 
 run: builddocker
 	docker run -p 8080:8080 bborbe/static-go-webserver
