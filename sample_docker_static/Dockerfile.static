@@ -1,4 +1,5 @@
 FROM tianon/true
+MAINTAINER Benjamin Borbe <bborbe@rocketnews.de>
 EXPOSE 8080
 ADD main /
 CMD ["/main"]

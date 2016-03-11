@@ -1,4 +1,5 @@
 FROM golang
+MAINTAINER Benjamin Borbe <bborbe@rocketnews.de>
 ADD Makefile /
 WORKDIR /
 RUN make setup
