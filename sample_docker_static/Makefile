@@ -15,3 +15,6 @@ builddocker:
 
 run: builddocker
 	docker run -p 8080:8080 bborbe/static-go-webserver
+
+upload:
+	docker push bborbe/static-go-webserver
