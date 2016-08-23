@@ -2,8 +2,9 @@ package main
 
 import (
 	"flag"
-	"github.com/golang/glog"
 	"log"
+
+	"github.com/golang/glog"
 )
 
 func main() {

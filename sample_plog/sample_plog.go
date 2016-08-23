@@ -1,8 +1,9 @@
 package main
 
 import (
-	"github.com/coreos/pkg/capnslog"
 	"os"
+
+	"github.com/coreos/pkg/capnslog"
 )
 
 var plog = capnslog.NewPackageLogger("github.com/bborbe/sample_go", "sample_plog")
