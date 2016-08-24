@@ -1,0 +1,14 @@
+hash: 7f722277fc3499fc5e056482eb0f6f71730575adeb811e73c3d9403079318ef8
+updated: 2016-08-24T22:53:23.959297014+02:00
+imports:
+- name: github.com/coreos/go-systemd
+  version: 422fafb691792ca9fdf7097a5ebd49f10839676c
+  subpackages:
+  - journal
+- name: github.com/coreos/pkg
+  version: 3ac0863d7acf3bc44daf49afef8919af12f704ef
+  subpackages:
+  - capnslog
+- name: github.com/golang/glog
+  version: 23def4e6c14b4da8ac2ed8007337bc5eb5007998
+testImports: []
