@@ -1,8 +1,8 @@
 hash: 7f722277fc3499fc5e056482eb0f6f71730575adeb811e73c3d9403079318ef8
-updated: 2016-08-24T22:53:23.959297014+02:00
+updated: 2016-08-25T20:09:15.090599526+02:00
 imports:
 - name: github.com/coreos/go-systemd
-  version: 422fafb691792ca9fdf7097a5ebd49f10839676c
+  version: bc4673a015e2bef29b93c19ed1aa9aefb65339bf
   subpackages:
   - journal
 - name: github.com/coreos/pkg
