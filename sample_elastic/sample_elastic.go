@@ -37,6 +37,7 @@ type tweet struct {
 	User     string
 	Message  string
 	Retweets int
+	Keywords []string
 }
 
 func do(ctx context.Context) error {
@@ -68,12 +69,15 @@ func do(ctx context.Context) error {
 		t := tweet{
 			User:     "olivere",
 			Message:  "Take Five",
-			Retweets: 0,
+			Keywords: []string{"Foo", "Bar", fmt.Sprintf("tweet%d", i)},
+			Retweets: 3 * i % 25,
 		}
+
 		put1, err := client.Index().Index(indexName).Type("tweet").Id(strconv.Itoa(i)).BodyJson(t).Do(context.Background())
 		if err != nil {
 			return fmt.Errorf("create failed: %v", err)
 		}
+		fmt.Printf("result for %d %v", i, put1)
 		if !put1.Created {
 			fmt.Printf("create entry %d in index failed\n", i)
 		}
