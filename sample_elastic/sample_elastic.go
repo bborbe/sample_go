@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"gopkg.in/olivere/elastic.v5"
 	"os"
+	"reflect"
 	"runtime"
 	"strconv"
 )
@@ -18,6 +19,7 @@ var (
 	urlPtr      = flag.String("url", "", "elasticsearch url")
 	usernamePtr = flag.String("user", "", "elasticsearch username")
 	passwordPtr = flag.String("pass", "", "elasticsearch password")
+	limitPtr    = flag.Int("limit", 10, "limit")
 )
 
 func main() {
@@ -65,7 +67,7 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("open index %v failed: %v", indexName, err)
 	}
 
-	for i := 0; i < 100; i++ {
+	for i := 0; i < *limitPtr; i++ {
 		t := tweet{
 			User:     "olivere",
 			Message:  "Take Five",
@@ -83,6 +85,24 @@ func do(ctx context.Context) error {
 		}
 	}
 	fmt.Printf("create\n")
+
+	var tweetType tweet
+
+	searchresult, err := client.Search(indexName).Do(context.Background())
+	if err != nil {
+		return fmt.Errorf("search failed: %v", err)
+	}
+	fmt.Printf("hits %d\n", searchresult.TotalHits())
+	results := searchresult.Each(reflect.TypeOf(tweetType))
+	fmt.Printf("results %d\n", len(results))
+
+	for _, r := range results {
+		t, ok := r.(tweet)
+		if ok {
+			fmt.Printf("%+v\n", t)
+		}
+	}
+
 	return nil
 }
 
