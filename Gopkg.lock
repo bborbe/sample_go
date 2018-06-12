@@ -155,6 +155,12 @@
   packages = [
     "bcrypt",
     "blowfish",
+    "curve25519",
+    "ed25519",
+    "ed25519/internal/edwards25519",
+    "internal/chacha20",
+    "poly1305",
+    "ssh",
     "ssh/terminal"
   ]
   revision = "b47b1587369238182299fe4dad77d05b8b461e06"
@@ -367,6 +373,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "74dabe787a1ccb53bdfe6b6591808b321d4afb0613da0691da26b0dec0882c20"
+  inputs-digest = "be9c7d3e367e13c6eaa06eacd2f39d17b6ae2e9ed471b09fb1604e688d2d7b77"
   solver-name = "gps-cdcl"
   solver-version = 1
