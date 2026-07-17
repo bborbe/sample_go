@@ -151,6 +151,22 @@ type TableMetadata struct {
 	// TableConstraints contains table primary and foreign keys constraints.
 	// Present only if the table has primary or foreign keys.
 	TableConstraints *TableConstraints
+
+	// MaxStaleness staleness of data that could be
+	// returned when the table (or stale MV) is queried.
+	MaxStaleness *IntervalValue
+
+	// The tags associated with this table. Tag
+	// keys are globally unique. See additional information on tags
+	// (https://cloud.google.com/iam/docs/tags-access-control#definitions).
+	// An object containing a list of "key": value pairs. The key is the
+	// namespaced friendly name of the tag key, e.g. "12345/environment"
+	// where 12345 is parent id. The value is the friendly short name of the
+	// tag value, e.g. "production".
+	ResourceTags map[string]string
+
+	// Specifies the configuration of a BigQuery table for Apache Iceberg (formerly BigLake Managed Table).
+	BigLakeConfiguration *BigLakeConfiguration
 }
 
 // TableConstraints defines the primary key and foreign key of a table.
@@ -272,9 +288,13 @@ const (
 	// Data is appended atomically on successful completion of a job.
 	WriteAppend TableWriteDisposition = "WRITE_APPEND"
 
-	// WriteTruncate overrides the existing data in the destination table.
+	// WriteTruncate overwrites the existing data in the destination table.
 	// Data is overwritten atomically on successful completion of a job.
 	WriteTruncate TableWriteDisposition = "WRITE_TRUNCATE"
+
+	// WriteTruncateData overwrites the data, but keeps the constraints and
+	// reuses the schema for an existing table.
+	WriteTruncateData TableWriteDisposition = "WRITE_TRUNCATE_DATA"
 
 	// WriteEmpty fails writes if the destination table already contains data.
 	WriteEmpty TableWriteDisposition = "WRITE_EMPTY"
@@ -317,19 +337,35 @@ type MaterializedViewDefinition struct {
 	// RefreshInterval defines the maximum frequency, in millisecond precision,
 	// at which this this materialized view will be refreshed.
 	RefreshInterval time.Duration
+
+	// AllowNonIncrementalDefinition for materialized view definition.
+	// The default value is false.
+	AllowNonIncrementalDefinition bool
+
+	// MaxStaleness of data that could be returned when materialized
+	// view is queried.
+	//
+	// Deprecated: use Table level MaxStaleness.
+	MaxStaleness *IntervalValue
 }
 
 func (mvd *MaterializedViewDefinition) toBQ() *bq.MaterializedViewDefinition {
 	if mvd == nil {
 		return nil
 	}
+	maxStaleness := ""
+	if mvd.MaxStaleness != nil {
+		maxStaleness = mvd.MaxStaleness.String()
+	}
 	return &bq.MaterializedViewDefinition{
-		EnableRefresh:     mvd.EnableRefresh,
-		Query:             mvd.Query,
-		LastRefreshTime:   mvd.LastRefreshTime.UnixNano() / 1e6,
-		RefreshIntervalMs: int64(mvd.RefreshInterval) / 1e6,
+		EnableRefresh:                 mvd.EnableRefresh,
+		Query:                         mvd.Query,
+		LastRefreshTime:               mvd.LastRefreshTime.UnixNano() / 1e6,
+		RefreshIntervalMs:             int64(mvd.RefreshInterval) / 1e6,
+		AllowNonIncrementalDefinition: mvd.AllowNonIncrementalDefinition,
+		MaxStaleness:                  maxStaleness,
 		// force sending the bool in all cases due to how Go handles false.
-		ForceSendFields: []string{"EnableRefresh"},
+		ForceSendFields: []string{"EnableRefresh", "AllowNonIncrementalDefinition"},
 	}
 }
 
@@ -337,11 +373,82 @@ func bqToMaterializedViewDefinition(q *bq.MaterializedViewDefinition) *Materiali
 	if q == nil {
 		return nil
 	}
+	var maxStaleness *IntervalValue
+	if q.MaxStaleness != "" {
+		maxStaleness, _ = ParseInterval(q.MaxStaleness)
+	}
 	return &MaterializedViewDefinition{
-		EnableRefresh:   q.EnableRefresh,
-		Query:           q.Query,
-		LastRefreshTime: unixMillisToTime(q.LastRefreshTime),
-		RefreshInterval: time.Duration(q.RefreshIntervalMs) * time.Millisecond,
+		EnableRefresh:                 q.EnableRefresh,
+		Query:                         q.Query,
+		LastRefreshTime:               unixMillisToTime(q.LastRefreshTime),
+		RefreshInterval:               time.Duration(q.RefreshIntervalMs) * time.Millisecond,
+		AllowNonIncrementalDefinition: q.AllowNonIncrementalDefinition,
+		MaxStaleness:                  maxStaleness,
+	}
+}
+
+// BigLakeFileFormat represents the file format for Managed Tables for Apache Iceberg.
+type BigLakeFileFormat string
+
+var (
+	// UnspecifiedBigLakeFileFormat represents the default value.
+	UnspecifiedBigLakeFileFormat BigLakeFileFormat = "FILE_FORMAT_UNSPECIFIED"
+	// ParquetBigLakeFileFormat represents Apache Parquet Format.
+	ParquetBigLakeFileFormat BigLakeFileFormat = "PARQUET"
+)
+
+// BigLakeTableFormat represents the table metadata format for Managed Tables for Apache Iceberg.
+type BigLakeTableFormat string
+
+var (
+	// UnspecifiedBigLakeTableFormat represents the default value.
+	UnspecifiedBigLakeTableFormat BigLakeTableFormat = "TABLE_FORMAT_UNSPECIFIED"
+	// IcebergBigLakeTableFormat represent Apache Iceberg Format.
+	IcebergBigLakeTableFormat BigLakeTableFormat = "ICEBERG"
+)
+
+// BigLakeConfiguration is used to configure aspects of BigQuery tables for
+// Apache Iceberg (previously known as BigLake managed tables).
+type BigLakeConfiguration struct {
+	// Optional. The connection specifying the credentials to be used to read and
+	// write to external storage, such as Cloud Storage. The connection_id can
+	// have the form `{project}.{location}.{connection_id}` or
+	// `projects/{project}/locations/{location}/connections/{connection_id}".
+	ConnectionID string
+
+	// Optional. The fully qualified location prefix of the external folder where
+	// table data is stored. The '*' wildcard character is not allowed. The URI
+	// should be in the format `gs://bucket/path_to_table/`
+	StorageURI string
+
+	// Optional. The file format the table data is stored in.
+	FileFormat BigLakeFileFormat
+
+	// Optional. The table format the metadata only snapshots are stored in.
+	TableFormat BigLakeTableFormat
+}
+
+func (blc *BigLakeConfiguration) toBQ() *bq.BigLakeConfiguration {
+	if blc == nil {
+		return nil
+	}
+	return &bq.BigLakeConfiguration{
+		ConnectionId: blc.ConnectionID,
+		StorageUri:   blc.StorageURI,
+		FileFormat:   string(blc.FileFormat),
+		TableFormat:  string(blc.TableFormat),
+	}
+}
+
+func bqToBigLakeConfiguration(in *bq.BigLakeConfiguration) *BigLakeConfiguration {
+	if in == nil {
+		return nil
+	}
+	return &BigLakeConfiguration{
+		ConnectionID: in.ConnectionId,
+		StorageURI:   in.StorageUri,
+		FileFormat:   BigLakeFileFormat(in.FileFormat),
+		TableFormat:  BigLakeTableFormat(in.TableFormat),
 	}
 }
 
@@ -689,12 +796,13 @@ func (t *Table) Create(ctx context.Context, tm *TableMetadata) (err error) {
 		TableId:   t.TableID,
 	}
 
+	ctx = setDatasetItemTraceMetadata(ctx, t.ProjectID, t.DatasetID, "tables")
 	req := t.c.bqs.Tables.Insert(t.ProjectID, t.DatasetID, table).Context(ctx)
 	setClientHeader(req.Header())
 	return runWithRetry(ctx, func() (err error) {
-		ctx = trace.StartSpan(ctx, "bigquery.tables.insert")
+		sCtx := trace.StartSpan(ctx, "bigquery.tables.insert")
 		_, err = req.Do()
-		trace.EndSpan(ctx, err)
+		trace.EndSpan(sCtx, err)
 		return err
 	})
 }
@@ -734,6 +842,7 @@ func (tm *TableMetadata) toBQ() (*bq.Table, error) {
 	t.RequirePartitionFilter = tm.RequirePartitionFilter
 	t.SnapshotDefinition = tm.SnapshotDefinition.toBQ()
 	t.CloneDefinition = tm.CloneDefinition.toBQ()
+	t.BiglakeConfiguration = tm.BigLakeConfiguration.toBQ()
 
 	if !validExpiration(tm.ExpirationTime) {
 		return nil, fmt.Errorf("invalid expiration time: %v.\n"+
@@ -747,32 +856,18 @@ func (tm *TableMetadata) toBQ() (*bq.Table, error) {
 		t.ExternalDataConfiguration = &edc
 	}
 	t.EncryptionConfiguration = tm.EncryptionConfig.toBQ()
-	if tm.FullID != "" {
-		return nil, errors.New("cannot set FullID on create")
-	}
-	if tm.Type != "" {
-		return nil, errors.New("cannot set Type on create")
-	}
+	// Propagate read-only fields.
+	t.Id = tm.FullID
+	t.Type = string(tm.Type)
+	t.NumBytes = tm.NumBytes
+	t.NumLongTermBytes = tm.NumLongTermBytes
+	t.NumRows = tm.NumRows
+	t.Etag = tm.ETag
 	if !tm.CreationTime.IsZero() {
-		return nil, errors.New("cannot set CreationTime on create")
+		t.CreationTime = tm.CreationTime.UnixMilli()
 	}
 	if !tm.LastModifiedTime.IsZero() {
-		return nil, errors.New("cannot set LastModifiedTime on create")
-	}
-	if tm.NumBytes != 0 {
-		return nil, errors.New("cannot set NumBytes on create")
-	}
-	if tm.NumLongTermBytes != 0 {
-		return nil, errors.New("cannot set NumLongTermBytes on create")
-	}
-	if tm.NumRows != 0 {
-		return nil, errors.New("cannot set NumRows on create")
-	}
-	if tm.StreamingBuffer != nil {
-		return nil, errors.New("cannot set StreamingBuffer on create")
-	}
-	if tm.ETag != "" {
-		return nil, errors.New("cannot set ETag on create")
+		t.LastModifiedTime = uint64(tm.LastModifiedTime.UnixMilli())
 	}
 	t.DefaultCollation = string(tm.DefaultCollation)
 
@@ -786,6 +881,15 @@ func (tm *TableMetadata) toBQ() (*bq.Table, error) {
 			for i, fk := range tm.TableConstraints.ForeignKeys {
 				t.TableConstraints.ForeignKeys[i] = fk.toBQ()
 			}
+		}
+	}
+	if tm.MaxStaleness != nil {
+		t.MaxStaleness = tm.MaxStaleness.String()
+	}
+	if tm.ResourceTags != nil {
+		t.ResourceTags = make(map[string]string)
+		for k, v := range tm.ResourceTags {
+			t.ResourceTags[k] = v
 		}
 	}
 	return t, nil
@@ -832,6 +936,7 @@ func (t *Table) Metadata(ctx context.Context, opts ...TableMetadataOption) (md *
 	ctx = trace.StartSpan(ctx, "cloud.google.com/go/bigquery.Table.Metadata")
 	defer func() { trace.EndSpan(ctx, err) }()
 
+	ctx = setTableTraceMetadata(ctx, t.ProjectID, t.DatasetID, t.TableID)
 	tgc := &tableGetCall{
 		call: t.c.bqs.Tables.Get(t.ProjectID, t.DatasetID, t.TableID).Context(ctx),
 	}
@@ -873,6 +978,7 @@ func bqToTableMetadata(t *bq.Table, c *Client) (*TableMetadata, error) {
 		RequirePartitionFilter: t.RequirePartitionFilter,
 		SnapshotDefinition:     bqToSnapshotDefinition(t.SnapshotDefinition, c),
 		CloneDefinition:        bqToCloneDefinition(t.CloneDefinition, c),
+		BigLakeConfiguration:   bqToBigLakeConfiguration(t.BiglakeConfiguration),
 	}
 	if t.MaterializedView != nil {
 		md.MaterializedView = bqToMaterializedViewDefinition(t.MaterializedView)
@@ -907,6 +1013,15 @@ func bqToTableMetadata(t *bq.Table, c *Client) (*TableMetadata, error) {
 			ForeignKeys: bqToForeignKeys(t.TableConstraints, c),
 		}
 	}
+	if t.MaxStaleness != "" {
+		md.MaxStaleness, _ = ParseInterval(t.MaxStaleness)
+	}
+	if t.ResourceTags != nil {
+		md.ResourceTags = make(map[string]string)
+		for k, v := range t.ResourceTags {
+			md.ResourceTags[k] = v
+		}
+	}
 	return md, nil
 }
 
@@ -915,13 +1030,14 @@ func (t *Table) Delete(ctx context.Context) (err error) {
 	ctx = trace.StartSpan(ctx, "cloud.google.com/go/bigquery.Table.Delete")
 	defer func() { trace.EndSpan(ctx, err) }()
 
+	ctx = setTableTraceMetadata(ctx, t.ProjectID, t.DatasetID, t.TableID)
 	call := t.c.bqs.Tables.Delete(t.ProjectID, t.DatasetID, t.TableID).Context(ctx)
 	setClientHeader(call.Header())
 
 	return runWithRetry(ctx, func() (err error) {
-		ctx = trace.StartSpan(ctx, "bigquery.tables.delete")
+		sCtx := trace.StartSpan(ctx, "bigquery.tables.delete")
 		err = call.Do()
-		trace.EndSpan(ctx, err)
+		trace.EndSpan(sCtx, err)
 		return err
 	})
 }
@@ -933,7 +1049,7 @@ func (t *Table) Read(ctx context.Context) *RowIterator {
 
 func (t *Table) read(ctx context.Context, pf pageFetcher) *RowIterator {
 	if t.c.isStorageReadAvailable() {
-		it, err := newStorageRowIteratorFromTable(ctx, t, false)
+		it, err := newStorageRowIteratorFromTable(ctx, t, t.c.projectID, false)
 		if err == nil {
 			return it
 		}
@@ -971,6 +1087,7 @@ func (t *Table) Update(ctx context.Context, tm TableMetadataToUpdate, etag strin
 		return nil, err
 	}
 
+	ctx = setTableTraceMetadata(ctx, t.ProjectID, t.DatasetID, t.TableID)
 	tpc := &tablePatchCall{
 		call: t.c.bqs.Tables.Patch(t.ProjectID, t.DatasetID, t.TableID, bqt).Context(ctx),
 	}
@@ -985,9 +1102,9 @@ func (t *Table) Update(ctx context.Context, tm TableMetadataToUpdate, etag strin
 	}
 	var res *bq.Table
 	if err := runWithRetry(ctx, func() (err error) {
-		ctx = trace.StartSpan(ctx, "bigquery.tables.patch")
+		sCtx := trace.StartSpan(ctx, "bigquery.tables.patch")
 		res, err = tpc.call.Do()
-		trace.EndSpan(ctx, err)
+		trace.EndSpan(sCtx, err)
 		return err
 	}); err != nil {
 		return nil, err
@@ -1027,6 +1144,13 @@ func (tm *TableMetadataToUpdate) toBQ() (*bq.Table, error) {
 
 	if tm.Clustering != nil {
 		t.Clustering = tm.Clustering.toBQ()
+		if t.Clustering != nil && len(t.Clustering.Fields) == 0 {
+			// Special logic for clearing fields.  The service rejects the empty list of fields,
+			// so we alter the payload to clear the message and leverage NullFields to send the
+			// default value.
+			t.Clustering = nil
+			t.NullFields = append(t.NullFields, "Clustering")
+		}
 	}
 
 	if !validExpiration(tm.ExpirationTime) {
@@ -1080,6 +1204,21 @@ func (tm *TableMetadataToUpdate) toBQ() (*bq.Table, error) {
 			}
 			t.TableConstraints.ForceSendFields = append(t.TableConstraints.ForceSendFields, "ForeignKeys")
 		}
+	}
+	if tm.MaxStaleness != nil {
+		t.MaxStaleness = tm.MaxStaleness.String()
+		forceSend("MaxStaleness")
+	}
+	if tm.ResourceTags != nil {
+		t.ResourceTags = make(map[string]string)
+		for k, v := range tm.ResourceTags {
+			t.ResourceTags[k] = v
+		}
+		forceSend("ResourceTags")
+	}
+	if tm.BigLakeConfiguration != nil {
+		t.BiglakeConfiguration = tm.BigLakeConfiguration.toBQ()
+		forceSend("BigLakeConfiguration")
 	}
 	labels, forces, nulls := tm.update()
 	t.Labels = labels
@@ -1161,6 +1300,22 @@ type TableMetadataToUpdate struct {
 	// TableConstraints allows modification of table constraints
 	// such as primary and foreign keys.
 	TableConstraints *TableConstraints
+
+	// MaxStaleness staleness of data that could be
+	// returned when the table (or stale MV) is queried.
+	MaxStaleness *IntervalValue
+
+	// The tags associated with this table. Tag
+	// keys are globally unique. See additional information on tags
+	// (https://cloud.google.com/iam/docs/tags-access-control#definitions).
+	// An object containing a list of "key": value pairs. The key is the
+	// namespaced friendly name of the tag key, e.g. "12345/environment"
+	// where 12345 is parent id. The value is the friendly short name of the
+	// tag value, e.g. "production".
+	ResourceTags map[string]string
+
+	// Update the configuration of a BigQuery table for Apache Iceberg (formerly BigLake Managed Table).
+	BigLakeConfiguration *BigLakeConfiguration
 
 	labelUpdater
 }

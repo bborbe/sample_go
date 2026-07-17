@@ -1,4 +1,4 @@
-// Copyright 2023 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,12 +19,14 @@ package storage
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/url"
 	"time"
 
 	storagepb "cloud.google.com/go/bigquery/storage/apiv1/storagepb"
 	gax "github.com/googleapis/gax-go/v2"
+	"github.com/googleapis/gax-go/v2/callctx"
 	"google.golang.org/api/option"
 	"google.golang.org/api/option/internaloption"
 	gtransport "google.golang.org/api/transport/grpc"
@@ -44,10 +46,13 @@ type BigQueryReadCallOptions struct {
 func defaultBigQueryReadGRPCClientOptions() []option.ClientOption {
 	return []option.ClientOption{
 		internaloption.WithDefaultEndpoint("bigquerystorage.googleapis.com:443"),
+		internaloption.WithDefaultEndpointTemplate("bigquerystorage.UNIVERSE_DOMAIN:443"),
 		internaloption.WithDefaultMTLSEndpoint("bigquerystorage.mtls.googleapis.com:443"),
+		internaloption.WithDefaultUniverseDomain("googleapis.com"),
 		internaloption.WithDefaultAudience("https://bigquerystorage.googleapis.com/"),
 		internaloption.WithDefaultScopes(DefaultAuthScopes()...),
 		internaloption.EnableJwtWithScope(),
+		internaloption.EnableNewAuthLibrary(),
 		option.WithGRPCDialOption(grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(math.MaxInt32))),
 	}
@@ -121,7 +126,7 @@ type BigQueryReadClient struct {
 
 // Wrapper methods routed to the internal client.
 
-// Close closes the connection to the API service. The user should invoke this when
+// Close closes the connection to the API service. **Always** call Close() when
 // the client is no longer required.
 func (c *BigQueryReadClient) Close() error {
 	return c.internalClient.Close()
@@ -132,6 +137,16 @@ func (c *BigQueryReadClient) Close() error {
 // use by Google-written clients.
 func (c *BigQueryReadClient) setGoogleClientInfo(keyval ...string) {
 	c.internalClient.setGoogleClientInfo(keyval...)
+}
+
+// SetGoogleClientInfo sets the name and version of the application in
+// the `x-goog-api-client` header passed on each request. Intended for
+// use by Google-written clients.
+//
+// SetGoogleClientInfo is not concurrency-safe and should only be invoked
+// sequentially before concurrent operations begin.
+func (c *BigQueryReadClient) SetGoogleClientInfo(keyval ...string) {
+	c.setGoogleClientInfo(keyval...)
 }
 
 // Connection returns a connection to the API service.
@@ -166,9 +181,9 @@ func (c *BigQueryReadClient) CreateReadSession(ctx context.Context, req *storage
 }
 
 // ReadRows reads rows from the stream in the format prescribed by the ReadSession.
-// Each response contains one or more table rows, up to a maximum of 100 MiB
+// Each response contains one or more table rows, up to a maximum of 128 MB
 // per response; read requests which attempt to read individual rows larger
-// than 100 MiB will fail.
+// than 128 MB will fail.
 //
 // Each request also returns a set of stream statistics reflecting the current
 // state of the stream.
@@ -207,6 +222,8 @@ type bigQueryReadGRPCClient struct {
 
 	// The x-goog-* metadata to be sent with each request.
 	xGoogHeaders []string
+
+	logger *slog.Logger
 }
 
 // NewBigQueryReadClient creates a new big query read client based on gRPC.
@@ -217,6 +234,16 @@ type bigQueryReadGRPCClient struct {
 // The Read API can be used to read data from BigQuery.
 func NewBigQueryReadClient(ctx context.Context, opts ...option.ClientOption) (*BigQueryReadClient, error) {
 	clientOpts := defaultBigQueryReadGRPCClientOptions()
+	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
+		clientOpts = append(clientOpts, internaloption.WithTelemetryAttributes(map[string]string{
+			"gcp.client.service":  "bigquerystorage",
+			"gcp.client.version":  getVersionClient(),
+			"gcp.client.repo":     "googleapis/google-cloud-go",
+			"gcp.client.artifact": "cloud.google.com/go/bigquery/storage/apiv1",
+			"gcp.client.language": "go",
+			"url.domain":          "bigquerystorage.googleapis.com",
+		}))
+	}
 	if newBigQueryReadClientHook != nil {
 		hookOpts, err := newBigQueryReadClientHook(ctx, clientHookParams{})
 		if err != nil {
@@ -235,8 +262,25 @@ func NewBigQueryReadClient(ctx context.Context, opts ...option.ClientOption) (*B
 		connPool:           connPool,
 		bigQueryReadClient: storagepb.NewBigQueryReadClient(connPool),
 		CallOptions:        &client.CallOptions,
+		logger:             internaloption.GetLogger(opts),
 	}
 	c.setGoogleClientInfo()
+	if gax.IsFeatureEnabled("METRICS") {
+		metrics := gax.NewClientMetrics(
+			gax.WithTelemetryLogger(c.logger),
+			gax.WithTelemetryAttributes(map[string]string{
+				gax.ClientService:  "bigquerystorage",
+				gax.ClientVersion:  getVersionClient(),
+				gax.ClientArtifact: "cloud.google.com/go/bigquery/storage/apiv1",
+				gax.RPCSystem:      "grpc",
+				gax.URLDomain:      "bigquerystorage.googleapis.com",
+			}),
+		)
+
+		client.CallOptions.CreateReadSession = append(client.CallOptions.CreateReadSession, gax.WithClientMetrics(metrics))
+		client.CallOptions.ReadRows = append(client.CallOptions.ReadRows, gax.WithClientMetrics(metrics))
+		client.CallOptions.SplitReadStream = append(client.CallOptions.SplitReadStream, gax.WithClientMetrics(metrics))
+	}
 
 	client.internalClient = c
 
@@ -256,11 +300,13 @@ func (c *bigQueryReadGRPCClient) Connection() *grpc.ClientConn {
 // use by Google-written clients.
 func (c *bigQueryReadGRPCClient) setGoogleClientInfo(keyval ...string) {
 	kv := append([]string{"gl-go", gax.GoVersion}, keyval...)
-	kv = append(kv, "gapic", getVersionClient(), "gax", gax.Version, "grpc", grpc.Version)
-	c.xGoogHeaders = []string{"x-goog-api-client", gax.XGoogHeader(kv...)}
+	kv = append(kv, "gapic", getVersionClient(), "gax", gax.Version, "grpc", grpc.Version, "pb", protoVersion)
+	c.xGoogHeaders = []string{
+		"x-goog-api-client", gax.XGoogHeader(kv...),
+	}
 }
 
-// Close closes the connection to the API service. The user should invoke this when
+// Close closes the connection to the API service. **Always** call Close() when
 // the client is no longer required.
 func (c *bigQueryReadGRPCClient) Close() error {
 	return c.connPool.Close()
@@ -271,11 +317,17 @@ func (c *bigQueryReadGRPCClient) CreateReadSession(ctx context.Context, req *sto
 
 	hds = append(c.xGoogHeaders, hds...)
 	ctx = gax.InsertMetadataIntoOutgoingContext(ctx, hds...)
+	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
+		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//bigquerystorage.googleapis.com/%v", req.GetParent()))
+	}
+	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
+		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.bigquery.storage.v1.BigQueryRead/CreateReadSession")
+	}
 	opts = append((*c.CallOptions).CreateReadSession[0:len((*c.CallOptions).CreateReadSession):len((*c.CallOptions).CreateReadSession)], opts...)
 	var resp *storagepb.ReadSession
 	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
 		var err error
-		resp, err = c.bigQueryReadClient.CreateReadSession(ctx, req, settings.GRPC...)
+		resp, err = executeRPC(ctx, c.bigQueryReadClient.CreateReadSession, req, settings.GRPC, c.logger, "CreateReadSession")
 		return err
 	}, opts...)
 	if err != nil {
@@ -289,11 +341,19 @@ func (c *bigQueryReadGRPCClient) ReadRows(ctx context.Context, req *storagepb.Re
 
 	hds = append(c.xGoogHeaders, hds...)
 	ctx = gax.InsertMetadataIntoOutgoingContext(ctx, hds...)
+	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
+		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//bigquerystorage.googleapis.com/%v", req.GetReadStream()))
+	}
+	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
+		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.bigquery.storage.v1.BigQueryRead/ReadRows")
+	}
 	opts = append((*c.CallOptions).ReadRows[0:len((*c.CallOptions).ReadRows):len((*c.CallOptions).ReadRows)], opts...)
 	var resp storagepb.BigQueryRead_ReadRowsClient
 	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
 		var err error
+		c.logger.DebugContext(ctx, "api streaming client request", "serviceName", serviceName, "rpcName", "ReadRows")
 		resp, err = c.bigQueryReadClient.ReadRows(ctx, req, settings.GRPC...)
+		c.logger.DebugContext(ctx, "api streaming client response", "serviceName", serviceName, "rpcName", "ReadRows")
 		return err
 	}, opts...)
 	if err != nil {
@@ -307,11 +367,17 @@ func (c *bigQueryReadGRPCClient) SplitReadStream(ctx context.Context, req *stora
 
 	hds = append(c.xGoogHeaders, hds...)
 	ctx = gax.InsertMetadataIntoOutgoingContext(ctx, hds...)
+	if gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
+		ctx = callctx.WithTelemetryContext(ctx, "resource_name", fmt.Sprintf("//bigquerystorage.googleapis.com/%v", req.GetName()))
+	}
+	if gax.IsFeatureEnabled("METRICS") || gax.IsFeatureEnabled("TRACING") || gax.IsFeatureEnabled("LOGGING") {
+		ctx = callctx.WithTelemetryContext(ctx, "rpc_method", "google.cloud.bigquery.storage.v1.BigQueryRead/SplitReadStream")
+	}
 	opts = append((*c.CallOptions).SplitReadStream[0:len((*c.CallOptions).SplitReadStream):len((*c.CallOptions).SplitReadStream)], opts...)
 	var resp *storagepb.SplitReadStreamResponse
 	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
 		var err error
-		resp, err = c.bigQueryReadClient.SplitReadStream(ctx, req, settings.GRPC...)
+		resp, err = executeRPC(ctx, c.bigQueryReadClient.SplitReadStream, req, settings.GRPC, c.logger, "SplitReadStream")
 		return err
 	}, opts...)
 	if err != nil {
